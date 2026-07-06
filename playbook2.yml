@@ -1,0 +1,197 @@
+---
+- name: Install Nexus, Build WAR and Upload to Nexus
+  hosts: ci
+  become: yes
+
+  vars_files:
+    - nexuspass.yaml
+
+  vars:
+
+    github_repo: "https://github.com/sresrinivas/etoe.git"
+
+    repo_dest: "/opt/myproject"
+
+    java_package: openjdk-17-jdk
+
+    maven_version: 3.9.11
+
+    nexus_version: 3.81.1-01
+
+    nexus_user: nexus
+
+    nexus_home: /opt/nexus
+
+    nexus_data: /opt/sonatype-work
+
+    nexus_url: "http://{{ ansible_default_ipv4.address }}:8081"
+
+    repo_name: maven-releases
+
+  tasks:
+
+  - name: Update apt
+    apt:
+      update_cache: yes
+
+  - name: Install packages
+    apt:
+      name:
+        - "{{ java_package }}"
+        - git
+        - wget
+        - unzip
+        - curl
+        - tar
+      state: present
+
+  - name: Create nexus user
+    user:
+      name: "{{ nexus_user }}"
+      shell: /bin/bash
+
+  - name: Download Maven
+    get_url:
+      url: "https://dlcdn.apache.org/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.tar.gz"
+      dest: /tmp/maven.tar.gz
+
+  - name: Extract Maven
+    unarchive:
+      src: /tmp/maven.tar.gz
+      dest: /opt
+      remote_src: yes
+      creates: /opt/apache-maven-3.9.16
+
+  - name: Maven profile
+    copy:
+      dest: /etc/profile.d/maven.sh
+      mode: "0755"
+      content: |
+        export M2_HOME=/opt/apache-maven-3.9.16
+        export PATH=$M2_HOME/bin:$PATH
+  
+  - name: Create mvn symlink
+    file:
+      src: /opt/apache-maven-3.9.16/bin/mvn
+      dest: /usr/local/bin/mvn
+      state: link  
+
+  - name: Download Nexus
+    get_url:
+      url: "https://download.sonatype.com/nexus/3/nexus-{{ nexus_version }}-linux-x86_64.tar.gz"
+      dest: /tmp/nexus.tar.gz
+
+  - name: Extract Nexus
+    unarchive:
+      src: /tmp/nexus.tar.gz
+      dest: /opt
+      remote_src: yes
+
+  - name: Rename Nexus
+    command: mv /opt/nexus-{{ nexus_version }} {{ nexus_home }}
+    args:
+      creates: "{{ nexus_home }}"
+
+  - name: Create data directory
+    file:
+      path: "{{ nexus_data }}"
+      state: directory
+      owner: "{{ nexus_user }}"
+      group: "{{ nexus_user }}"
+      mode: "0755"
+
+  - name: Set ownership
+    file:
+      path: "{{ item }}"
+      owner: "{{ nexus_user }}"
+      group: "{{ nexus_user }}"
+      recurse: yes
+    loop:
+      - "{{ nexus_home }}"
+      - "{{ nexus_data }}"
+
+#################################################
+# Configure Nexus to run as nexus user
+#################################################
+
+  - name: Create nexus.rc
+    copy:
+      dest: "{{ nexus_home }}/bin/nexus.rc"
+      content: |
+        run_as_user="{{ nexus_user }}"
+      owner: "{{ nexus_user }}"
+      group: "{{ nexus_user }}"
+      mode: "0644"
+
+#################################################
+# Fix startup script for Ubuntu
+#################################################
+
+  - name: Change nexus script to use bash
+    replace:
+      path: "{{ nexus_home }}/bin/nexus"
+      regexp: '^#!/bin/sh'
+      replace: '#!/bin/bash'
+
+
+#################################################
+# Create systemd service
+#################################################
+
+  - name: Create Nexus systemd service
+    copy:
+      dest: /etc/systemd/system/nexus.service
+      mode: "0644"
+      content: |
+        [Unit]
+        Description=Nexus Repository Manager
+        After=network.target
+
+        [Service]
+        Type=forking
+        User={{ nexus_user }}
+        Group={{ nexus_user }}
+        LimitNOFILE=65536
+        ExecStart={{ nexus_home }}/bin/nexus start
+        ExecStop={{ nexus_home }}/bin/nexus stop
+        Restart=on-abort
+
+        [Install]
+        WantedBy=multi-user.target
+
+#################################################
+# Reload systemd
+#################################################
+
+  - name: Reload systemd
+    systemd:
+      daemon_reload: yes
+
+#################################################
+# Start Nexus
+#################################################
+
+  - name: Enable and start Nexus
+    systemd:
+      name: nexus
+      enabled: yes
+      state: started
+
+#################################################
+# Wait until Nexus starts
+#################################################
+
+  - name: Wait for Nexus port
+    wait_for:
+      host: 127.0.0.1
+      port: 8081
+      timeout: 300
+
+#################################################
+# Verify Nexus
+#################################################
+
+  - name: Verify Nexus
+    uri:
+      url: http://localhost:8081
+      status_code: 200

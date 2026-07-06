@@ -1,0 +1,103 @@
+---
+- name: Install Nexus, Build WAR and Upload to Nexus
+  hosts: ci
+  become: yes
+
+  vars_files:
+    - nexuspass.yaml
+
+  vars:
+
+    github_repo: "https://github.com/sresrinivas/etoe.git"
+
+    repo_dest: "/opt/myproject"
+
+    java_package: openjdk-17-jdk
+
+    maven_version: 3.9.11
+
+    nexus_version: 3.81.1-01
+
+    nexus_user: nexus
+
+    nexus_home: /opt/nexus
+
+    nexus_data: /opt/sonatype-work
+
+    nexus_url: "http://{{ ansible_default_ipv4.address }}:8081"
+
+    repo_name: maven-releases
+
+  tasks:
+
+  - name: Update apt
+    apt:
+      update_cache: yes
+
+  - name: Install packages
+    apt:
+      name:
+        - "{{ java_package }}"
+        - git
+        - wget
+        - unzip
+        - curl
+        - tar
+      state: present
+
+  - name: Create nexus user
+    user:
+      name: "{{ nexus_user }}"
+      shell: /bin/bash
+
+  - name: Download Maven
+    get_url:
+      url: "https://dlcdn.apache.org/maven/maven-3/{{ maven_version }}/binaries/apache-maven-{{ maven_version }}-bin.tar.gz"
+      dest: /tmp/maven.tar.gz
+
+  - name: Extract Maven
+    unarchive:
+      src: /tmp/maven.tar.gz
+      dest: /opt
+      remote_src: yes
+
+  - name: Maven profile
+    copy:
+      dest: /etc/profile.d/maven.sh
+      content: |
+        export M2_HOME=/opt/apache-maven-{{ maven_version }}
+        export PATH=$M2_HOME/bin:$PATH
+
+  - name: Download Nexus
+    get_url:
+      url: "https://download.sonatype.com/nexus/3/nexus-{{ nexus_version }}-linux-x86_64.tar.gz"
+      dest: /tmp/nexus.tar.gz
+
+  - name: Extract Nexus
+    unarchive:
+      src: /tmp/nexus.tar.gz
+      dest: /opt
+      remote_src: yes
+
+  - name: Rename Nexus
+    command: mv /opt/nexus-{{ nexus_version }} {{ nexus_home }}
+    args:
+      creates: "{{ nexus_home }}"
+
+  - name: Create data directory
+    file:
+      path: "{{ nexus_data }}"
+      state: directory
+      owner: "{{ nexus_user }}"
+      group: "{{ nexus_user }}"
+      mode: "0755"
+
+  - name: Set ownership
+    file:
+      path: "{{ item }}"
+      owner: "{{ nexus_user }}"
+      group: "{{ nexus_user }}"
+      recurse: yes
+    loop:
+      - "{{ nexus_home }}"
+      - "{{ nexus_data }}"

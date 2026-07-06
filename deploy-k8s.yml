@@ -1,0 +1,58 @@
+---
+- name: Deploy latest Docker image to EKS
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+
+    namespace: default
+
+    deployment_name: ecomm
+
+    container_name: ecomm
+
+    image_name: sureshkiran/petclinic
+
+    image_tag: "1.0"
+
+  tasks:
+
+    - name: Check cluster connectivity
+      command: kubectl get nodes
+      register: nodes
+      changed_when: false
+
+    - debug:
+        var: nodes.stdout_lines
+
+    - name: Update Deployment image
+      command: >
+        kubectl set image deployment/{{ deployment_name }}
+        {{ container_name }}={{ image_name }}:{{ image_tag }}
+        -n {{ namespace }}
+
+    - name: Wait for rollout
+      command: kubectl rollout status deployment/{{ deployment_name }}
+      register: rollout
+
+    - debug:
+        var: rollout.stdout_lines
+
+    - name: Verify pods
+      command: kubectl get pods -n {{ namespace }}
+      register: pods
+      changed_when: false
+
+    - debug:
+        var: pods.stdout_lines
+
+    - name: Verify service
+      command: kubectl get svc -n {{ namespace }}
+      register: svc
+      changed_when: false
+
+    - debug:
+        var: svc.stdout_lines
+       
+        
